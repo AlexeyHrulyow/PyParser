@@ -8,20 +8,27 @@ import sys
 class PyParser:
     def __init__(self):
         self.config_file = Path("pyparser_config.json")
+        self.output_files = ["code.txt", "choosen_code.txt", "structure.txt"]
         self.config = self.init_config()
+        self.ensure_gitignore()
         self.main_loop()
 
     def init_config(self):
         default_config = {
-            "excluded": [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_config.json", "code.txt",
-                         "choosen_code.txt", "structure.txt"],
+            "excluded": [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_config.json"] + self.output_files,
             "auto_gitignore": True
         }
 
         if self.config_file.exists():
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    config = json.load(f)
+                    # Добавляем системные файлы, если их нет
+                    system_files = ["pyparser.py", "pyparser_config.json"] + self.output_files
+                    for sys_file in system_files:
+                        if sys_file not in config.get("excluded", []):
+                            config["excluded"].append(sys_file)
+                    return config
             except json.JSONDecodeError:
                 print("Ошибка чтения конфига, создан новый")
                 return self.create_config(default_config)
@@ -32,21 +39,14 @@ class PyParser:
         with open(self.config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
         print("Создан файл конфигурации")
-
-        if config.get("auto_gitignore", True):
-            self.update_gitignore()
-
         return config
 
-    def update_gitignore(self):
+    def ensure_gitignore(self):
+        if not self.config.get("auto_gitignore", True):
+            return
+
         gitignore_path = Path(".gitignore")
-        entries_to_add = [
-            "pyparser_config.json",
-            "code.txt",
-            "choosen_code.txt",
-            "structure.txt",
-            "pyparser.py"
-        ]
+        entries_to_add = self.output_files + ["pyparser_config.json", "pyparser.py"]
 
         if not gitignore_path.exists():
             with open(gitignore_path, 'w', encoding='utf-8') as f:
@@ -58,37 +58,123 @@ class PyParser:
 
         with open(gitignore_path, 'r+', encoding='utf-8') as f:
             content = f.read()
-            f.seek(0, os.SEEK_END)
+            lines = content.splitlines()
+            new_lines = []
 
-            if "# PyParser" not in content:
-                f.write("\n# PyParser generated files\n")
-                for entry in entries_to_add:
-                    if entry not in content:
-                        f.write(f"{entry}\n")
+            pyparser_section = False
+            updated = False
+
+            for line in lines:
+                if line.strip() == "# PyParser generated files":
+                    pyparser_section = True
+                    new_lines.append(line)
+                elif pyparser_section and line.strip() and not line.strip().startswith("#"):
+                    continue  # Пропускаем существующие записи PyParser
+                else:
+                    if pyparser_section and (not line.strip() or line.strip().startswith("#")):
+                        pyparser_section = False
+                    new_lines.append(line)
+
+            # Удаляем пустые строки в конце
+            while new_lines and not new_lines[-1].strip():
+                new_lines.pop()
+
+            # Добавляем секцию PyParser
+            if not any("# PyParser generated files" in line for line in new_lines):
+                new_lines.append("")
+                new_lines.append("# PyParser generated files")
+            else:
+                # Находим позицию секции PyParser
+                for i, line in enumerate(new_lines):
+                    if line.strip() == "# PyParser generated files":
+                        # Удаляем всё после этой строки до следующего комментария или пустой строки
+                        j = i + 1
+                        while j < len(new_lines) and new_lines[j].strip() and not new_lines[j].strip().startswith("#"):
+                            del new_lines[j]
+
+            # Добавляем все записи PyParser
+            for entry in entries_to_add:
+                if not any(entry == line.strip() for line in new_lines):
+                    for i, line in enumerate(new_lines):
+                        if line.strip() == "# PyParser generated files":
+                            new_lines.insert(i + 1, entry)
+                            updated = True
+                            break
+
+            if updated:
+                f.seek(0)
+                f.write("\n".join(new_lines))
+                f.truncate()
                 print(f"Обновлен {gitignore_path}")
 
     def should_exclude(self, path):
-        path_str = str(path)
-        path_parts = Path(path_str).parts
+        """Проверяет, нужно ли исключить путь"""
+        if isinstance(path, str):
+            path_obj = Path(path)
+        else:
+            path_obj = path
 
+        # Приводим к абсолютному пути для корректного сравнения
+        try:
+            abs_path = path_obj.absolute()
+        except:
+            return False
+
+        path_str = str(abs_path).replace('\\', '/')
+
+        # Получаем текущую рабочую директорию
+        cwd = Path.cwd().absolute()
+        cwd_str = str(cwd).replace('\\', '/')
+
+        # Преобразуем путь в относительный от текущей директории
+        if path_str.startswith(cwd_str + '/'):
+            rel_path = path_str[len(cwd_str) + 1:]
+        else:
+            rel_path = path_str
+
+        # Проверяем исключения
         for pattern in self.config.get("excluded", []):
-            pattern = pattern.rstrip('/\\')
+            pattern = pattern.strip()
+            if not pattern:
+                continue
 
-            if '*' in pattern:
-                if fnmatch.fnmatch(path_str, pattern):
+            # Нормализуем паттерн
+            pattern = pattern.replace('\\', '/')
+
+            # Если паттерн абсолютный путь
+            if os.path.isabs(pattern):
+                pattern_abs = Path(pattern).absolute()
+                pattern_str = str(pattern_abs).replace('\\', '/')
+                if path_str.startswith(pattern_str):
                     return True
-                dir_pattern = pattern + '/*'
-                if fnmatch.fnmatch(path_str, dir_pattern):
-                    return True
+
+            # Если паттерн относительный путь
             else:
-                if pattern in path_parts:
-                    return True
-                if Path(pattern) in Path(path_str).parents:
-                    return True
-                if path_str.startswith(pattern):
-                    if len(path_str) == len(pattern):
+                # Паттерн с /* в конце - исключаем директорию и всё внутри
+                if pattern.endswith('/*'):
+                    dir_pattern = pattern[:-2]
+                    if rel_path.startswith(dir_pattern + '/') or rel_path == dir_pattern:
                         return True
-                    if path_str[len(pattern)] in ['/', '\\']:
+                    # Проверяем на абсолютный путь
+                    if path_str.endswith('/' + dir_pattern) or path_str.endswith('/' + dir_pattern + '/'):
+                        return True
+
+                # Паттерн с wildcard
+                elif '*' in pattern:
+                    if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(path_str, pattern):
+                        return True
+
+                # Простая строка - имя файла или папки
+                else:
+                    # Проверяем, содержится ли паттерн в пути
+                    if pattern in rel_path.split('/') or pattern in path_str.split('/'):
+                        # Проверяем, что это отдельный элемент пути, а не часть имени
+                        path_parts = rel_path.split('/')
+                        if pattern in path_parts:
+                            return True
+
+                    # Проверяем полное совпадение
+                    if rel_path == pattern or path_str.endswith('/' + pattern):
                         return True
 
         return False
@@ -98,8 +184,18 @@ class PyParser:
         excluded_count = 0
 
         for root, dirs, files in os.walk(root_dir):
-            dirs[:] = [d for d in dirs if not self.should_exclude(os.path.join(root, d))]
+            # Исключаем директории
+            dirs_to_remove = []
+            for d in dirs:
+                full_dir_path = os.path.join(root, d)
+                if self.should_exclude(full_dir_path):
+                    dirs_to_remove.append(d)
+                    excluded_count += 1
 
+            for d in dirs_to_remove:
+                dirs.remove(d)
+
+            # Обрабатываем файлы
             for file in files:
                 if file.endswith('.py'):
                     full_path = os.path.join(root, file)
@@ -111,14 +207,29 @@ class PyParser:
         return py_files, excluded_count
 
     def try_read_file(self, file_path):
-        encodings = ['utf-8', 'cp1251', 'latin-1', 'iso-8859-1']
-        for encoding in encodings:
+        try:
+            with open(file_path, 'rb') as f:
+                raw_data = f.read()
+
+            encodings = ['utf-8', 'utf-8-sig', 'cp1251', 'latin-1', 'iso-8859-1']
+
+            for encoding in encodings:
+                try:
+                    return raw_data.decode(encoding)
+                except UnicodeDecodeError:
+                    continue
+
+            # Пробуем UTF-16
             try:
-                with open(file_path, 'r', encoding=encoding) as f:
-                    return f.read()
+                return raw_data.decode('utf-16')
             except UnicodeDecodeError:
-                continue
-        raise UnicodeDecodeError(f"Не удалось прочитать файл {file_path}")
+                pass
+
+            # В крайнем случае игнорируем ошибки
+            return raw_data.decode('utf-8', errors='ignore')
+
+        except Exception as e:
+            raise UnicodeDecodeError(f"Не удалось прочитать файл {file_path}: {e}")
 
     def collect_all_py_files(self):
         print("Поиск .py файлов...")
@@ -140,12 +251,12 @@ class PyParser:
                         out_f.write(f"# Файл: {file_path}\n")
                         out_f.write(f"{'=' * 80}\n\n")
                         out_f.write(content)
-                        out_f.write("\n\n")
+                        if not content.endswith('\n'):
+                            out_f.write('\n')
+                        out_f.write("\n")
 
-                    except UnicodeDecodeError as e:
-                        print(f"Пропущен {file_path} ({e})")
                     except Exception as e:
-                        print(f"Ошибка чтения {file_path}: {e}")
+                        print(f"Ошибка при обработке {file_path}: {e}")
 
             print(f"✓ Собрано {len(py_files)} файлов (исключено: {excluded_count})")
             print(f"✓ Результат сохранен в: {output_file}")
@@ -161,8 +272,11 @@ class PyParser:
             print("Текущие исключения:")
 
             excluded = self.config.get("excluded", [])
+            output_files_set = set(self.output_files + ["pyparser.py", "pyparser_config.json"])
+
             for i, item in enumerate(excluded, 1):
-                print(f"{i}. {item}")
+                marker = " [системное]" if item in output_files_set else ""
+                print(f"{i}. {item}{marker}")
 
             print(f"\n1. Добавить исключение")
             print(f"2. Удалить исключение")
@@ -186,9 +300,10 @@ class PyParser:
     def add_exception(self):
         print("\nФормат ввода:")
         print("- Файл: example.py")
-        print("- Папка (и всё внутри): folder/ или folder")
+        print("- Папка (и всё внутри): folder/  или folder/*")
         print("- Паттерн: *.py, test_*")
-        print("- Полный путь: /home/user/project/.venv")
+        print("\nДля исключения папки и всего внутри добавьте /* в конец")
+        print("Например: .idea/*")
         print("Можно указать несколько через запятую")
 
         user_input = input("\nВведите исключение(я): ").strip()
@@ -199,6 +314,16 @@ class PyParser:
         excluded = self.config.get("excluded", [])
 
         for item in new_items:
+            # Нормализуем путь
+            item = item.replace('\\', '/')
+
+            # Для папок добавляем оба варианта для надежности
+            if item.endswith('/'):
+                item = item.rstrip('/') + '/*'
+            elif not item.endswith('/*') and not '*' in item and not '.' in item:
+                # Если это похоже на имя папки без расширения
+                item = item + '/*'
+
             if item not in excluded:
                 excluded.append(item)
                 print(f"Добавлено: {item}")
@@ -206,6 +331,7 @@ class PyParser:
                 print(f"Уже существует: {item}")
 
         self.config["excluded"] = excluded
+        self.save_config()
 
     def remove_exception(self):
         excluded = self.config.get("excluded", [])
@@ -222,21 +348,33 @@ class PyParser:
             indices = [int(n.strip()) - 1 for n in nums.split(',')]
             indices.sort(reverse=True)
 
+            system_files = set(self.output_files + ["pyparser.py", "pyparser_config.json"])
+
+            removed_count = 0
             for idx in indices:
                 if 0 <= idx < len(excluded):
+                    if excluded[idx] in system_files:
+                        print(f"Нельзя удалить системное исключение: {excluded[idx]}")
+                        continue
                     removed = excluded.pop(idx)
                     print(f"Удалено: {removed}")
+                    removed_count += 1
                 else:
                     print(f"Неверный номер: {idx + 1}")
+
+            if removed_count > 0:
+                self.config["excluded"] = excluded
+                self.save_config()
 
         except ValueError:
             print("Ошибка: введите номера цифрами")
 
     def reset_exceptions(self):
-        default = [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_config.json", "code.txt",
-                   "choosen_code.txt", "structure.txt"]
+        default = [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_config.json"] + self.output_files
         self.config["excluded"] = default.copy()
+        self.save_config()
         print("Исключения сброшены к значениям по умолчанию")
+        self.ensure_gitignore()
 
     def save_config(self):
         with open(self.config_file, 'w', encoding='utf-8') as f:
@@ -305,7 +443,9 @@ class PyParser:
                         out_f.write(f"# Файл: {file_path}\n")
                         out_f.write(f"{'=' * 80}\n\n")
                         out_f.write(content)
-                        out_f.write("\n\n")
+                        if not content.endswith('\n'):
+                            out_f.write('\n')
+                        out_f.write("\n")
 
                     except Exception as e:
                         print(f"Ошибка чтения {file_path}: {e}")
@@ -338,6 +478,9 @@ class PyParser:
                 full_path = os.path.join(path, item)
                 if not self.should_exclude(full_path):
                     items.append((item, full_path))
+
+            if not items:
+                return
 
             items.sort(key=lambda x: (not os.path.isdir(x[1]), x[0].lower()))
 

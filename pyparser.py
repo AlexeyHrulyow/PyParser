@@ -2,7 +2,6 @@ import os
 import json
 import fnmatch
 from pathlib import Path
-from datetime import datetime
 import sys
 
 
@@ -14,8 +13,8 @@ class PyParser:
 
     def init_config(self):
         default_config = {
-            "excluded": [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_output_*.txt"],
-            "output_prefix": "pyparser_output_",
+            "excluded": [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_config.json", "code.txt",
+                         "choosen_code.txt", "structure.txt"],
             "auto_gitignore": True
         }
 
@@ -43,7 +42,9 @@ class PyParser:
         gitignore_path = Path(".gitignore")
         entries_to_add = [
             "pyparser_config.json",
-            "pyparser_output_*.txt",
+            "code.txt",
+            "choosen_code.txt",
+            "structure.txt",
             "pyparser.py"
         ]
 
@@ -68,13 +69,28 @@ class PyParser:
 
     def should_exclude(self, path):
         path_str = str(path)
+        path_parts = Path(path_str).parts
+
         for pattern in self.config.get("excluded", []):
-            if pattern in path_str:
-                return True
-            if '*' in pattern and fnmatch.fnmatch(path_str, pattern):
-                return True
-            if Path(pattern) in Path(path_str).parents:
-                return True
+            pattern = pattern.rstrip('/\\')
+
+            if '*' in pattern:
+                if fnmatch.fnmatch(path_str, pattern):
+                    return True
+                dir_pattern = pattern + '/*'
+                if fnmatch.fnmatch(path_str, dir_pattern):
+                    return True
+            else:
+                if pattern in path_parts:
+                    return True
+                if Path(pattern) in Path(path_str).parents:
+                    return True
+                if path_str.startswith(pattern):
+                    if len(path_str) == len(pattern):
+                        return True
+                    if path_str[len(pattern)] in ['/', '\\']:
+                        return True
+
         return False
 
     def find_py_files(self, root_dir="."):
@@ -94,6 +110,16 @@ class PyParser:
 
         return py_files, excluded_count
 
+    def try_read_file(self, file_path):
+        encodings = ['utf-8', 'cp1251', 'latin-1', 'iso-8859-1']
+        for encoding in encodings:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    return f.read()
+            except UnicodeDecodeError:
+                continue
+        raise UnicodeDecodeError(f"Не удалось прочитать файл {file_path}")
+
     def collect_all_py_files(self):
         print("Поиск .py файлов...")
         py_files, excluded_count = self.find_py_files()
@@ -102,15 +128,13 @@ class PyParser:
             print("Не найдено .py файлов для обработки")
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"{self.config.get('output_prefix', 'output_')}{timestamp}.txt"
+        output_file = "code.txt"
 
         try:
             with open(output_file, 'w', encoding='utf-8') as out_f:
                 for file_path in py_files:
                     try:
-                        with open(file_path, 'r', encoding='utf-8') as in_f:
-                            content = in_f.read()
+                        content = self.try_read_file(file_path)
 
                         out_f.write(f"\n{'=' * 80}\n")
                         out_f.write(f"# Файл: {file_path}\n")
@@ -118,25 +142,16 @@ class PyParser:
                         out_f.write(content)
                         out_f.write("\n\n")
 
-                    except UnicodeDecodeError:
-                        print(f"Пропущен {file_path} (неверная кодировка)")
+                    except UnicodeDecodeError as e:
+                        print(f"Пропущен {file_path} ({e})")
                     except Exception as e:
                         print(f"Ошибка чтения {file_path}: {e}")
-
-            if self.config.get("auto_gitignore", True):
-                self.add_to_gitignore(output_file)
 
             print(f"✓ Собрано {len(py_files)} файлов (исключено: {excluded_count})")
             print(f"✓ Результат сохранен в: {output_file}")
 
         except Exception as e:
             print(f"Ошибка записи в файл: {e}")
-
-    def add_to_gitignore(self, filename):
-        gitignore_path = Path(".gitignore")
-        if gitignore_path.exists():
-            with open(gitignore_path, 'a', encoding='utf-8') as f:
-                f.write(f"\n{filename}")
 
     def manage_exceptions(self):
         while True:
@@ -170,9 +185,9 @@ class PyParser:
 
     def add_exception(self):
         print("\nФормат ввода:")
-        print("- Простое имя файла: example.py")
+        print("- Файл: example.py")
+        print("- Папка (и всё внутри): folder/ или folder")
         print("- Паттерн: *.py, test_*")
-        print("- Папка: .venv/, build/")
         print("- Полный путь: /home/user/project/.venv")
         print("Можно указать несколько через запятую")
 
@@ -218,7 +233,8 @@ class PyParser:
             print("Ошибка: введите номера цифрами")
 
     def reset_exceptions(self):
-        default = [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_output_*.txt"]
+        default = [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_config.json", "code.txt",
+                   "choosen_code.txt", "structure.txt"]
         self.config["excluded"] = default.copy()
         print("Исключения сброшены к значениям по умолчанию")
 
@@ -277,15 +293,13 @@ class PyParser:
             print("Не выбрано ни одного файла")
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = f"{self.config.get('output_prefix', 'output_')}selected_{timestamp}.txt"
+        output_file = "choosen_code.txt"
 
         try:
             with open(output_file, 'w', encoding='utf-8') as out_f:
                 for file_path in selected_files:
                     try:
-                        with open(file_path, 'r', encoding='utf-8') as in_f:
-                            content = in_f.read()
+                        content = self.try_read_file(file_path)
 
                         out_f.write(f"\n{'=' * 80}\n")
                         out_f.write(f"# Файл: {file_path}\n")
@@ -303,12 +317,11 @@ class PyParser:
             print(f"Ошибка записи в файл: {e}")
 
     def generate_structure(self):
-        output_file = f"{self.config.get('output_prefix', 'output_')}structure_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        output_file = "structure.txt"
 
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(f"Структура проекта: {os.path.basename(os.getcwd())}\n")
-                f.write(f"Сгенерировано: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write("=" * 60 + "\n\n")
 
                 self._write_directory_tree(".", f, "", True)
@@ -352,10 +365,10 @@ class PyParser:
         print("\n" + "=" * 40)
         print("PyParser - Парсер Python проектов")
         print("=" * 40)
-        print("1. Собрать все .py файлы в txt")
+        print("1. Собрать все .py файлы в txt (code.txt)")
         print("2. Управление исключениями")
-        print("3. Собрать выбранные файлы .py в txt")
-        print("4. Создать структуру проекта в txt")
+        print("3. Собрать выбранные файлы .py в txt (choosen_code.txt)")
+        print("4. Создать структуру проекта в txt (structure.txt)")
         print("5. Выход")
         return input("\nВыберите действие (1-5): ").strip()
 

@@ -302,8 +302,6 @@ class PyParser:
         print("- Файл: example.py")
         print("- Папка (и всё внутри): folder/  или folder/*")
         print("- Паттерн: *.py, test_*")
-        print("\nДля исключения папки и всего внутри добавьте /* в конец")
-        print("Например: .idea/*")
         print("Можно указать несколько через запятую")
 
         user_input = input("\nВведите исключение(я): ").strip()

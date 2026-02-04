@@ -16,6 +16,7 @@ class PyParser:
     def init_config(self):
         default_config = {
             "excluded": [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_config.json"] + self.output_files,
+            "file_types": [".py", ".html", ".css", ".js", ".json", ".txt", ".md"],
             "auto_gitignore": True
         }
 
@@ -23,11 +24,12 @@ class PyParser:
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                    # Добавляем системные файлы, если их нет
                     system_files = ["pyparser.py", "pyparser_config.json"] + self.output_files
                     for sys_file in system_files:
                         if sys_file not in config.get("excluded", []):
                             config["excluded"].append(sys_file)
+                    if "file_types" not in config:
+                        config["file_types"] = default_config["file_types"]
                     return config
             except json.JSONDecodeError:
                 print("Ошибка чтения конфига, создан новый")
@@ -69,30 +71,25 @@ class PyParser:
                     pyparser_section = True
                     new_lines.append(line)
                 elif pyparser_section and line.strip() and not line.strip().startswith("#"):
-                    continue  # Пропускаем существующие записи PyParser
+                    continue
                 else:
                     if pyparser_section and (not line.strip() or line.strip().startswith("#")):
                         pyparser_section = False
                     new_lines.append(line)
 
-            # Удаляем пустые строки в конце
             while new_lines and not new_lines[-1].strip():
                 new_lines.pop()
 
-            # Добавляем секцию PyParser
             if not any("# PyParser generated files" in line for line in new_lines):
                 new_lines.append("")
                 new_lines.append("# PyParser generated files")
             else:
-                # Находим позицию секции PyParser
                 for i, line in enumerate(new_lines):
                     if line.strip() == "# PyParser generated files":
-                        # Удаляем всё после этой строки до следующего комментария или пустой строки
                         j = i + 1
                         while j < len(new_lines) and new_lines[j].strip() and not new_lines[j].strip().startswith("#"):
                             del new_lines[j]
 
-            # Добавляем все записи PyParser
             for entry in entries_to_add:
                 if not any(entry == line.strip() for line in new_lines):
                     for i, line in enumerate(new_lines):
@@ -108,13 +105,11 @@ class PyParser:
                 print(f"Обновлен {gitignore_path}")
 
     def should_exclude(self, path):
-        """Проверяет, нужно ли исключить путь"""
         if isinstance(path, str):
             path_obj = Path(path)
         else:
             path_obj = path
 
-        # Приводим к абсолютному пути для корректного сравнения
         try:
             abs_path = path_obj.absolute()
         except:
@@ -122,69 +117,58 @@ class PyParser:
 
         path_str = str(abs_path).replace('\\', '/')
 
-        # Получаем текущую рабочую директорию
         cwd = Path.cwd().absolute()
         cwd_str = str(cwd).replace('\\', '/')
 
-        # Преобразуем путь в относительный от текущей директории
         if path_str.startswith(cwd_str + '/'):
             rel_path = path_str[len(cwd_str) + 1:]
         else:
             rel_path = path_str
 
-        # Проверяем исключения
         for pattern in self.config.get("excluded", []):
             pattern = pattern.strip()
             if not pattern:
                 continue
 
-            # Нормализуем паттерн
             pattern = pattern.replace('\\', '/')
 
-            # Если паттерн абсолютный путь
             if os.path.isabs(pattern):
                 pattern_abs = Path(pattern).absolute()
                 pattern_str = str(pattern_abs).replace('\\', '/')
                 if path_str.startswith(pattern_str):
                     return True
 
-            # Если паттерн относительный путь
             else:
-                # Паттерн с /* в конце - исключаем директорию и всё внутри
                 if pattern.endswith('/*'):
                     dir_pattern = pattern[:-2]
                     if rel_path.startswith(dir_pattern + '/') or rel_path == dir_pattern:
                         return True
-                    # Проверяем на абсолютный путь
                     if path_str.endswith('/' + dir_pattern) or path_str.endswith('/' + dir_pattern + '/'):
                         return True
 
-                # Паттерн с wildcard
                 elif '*' in pattern:
                     if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(path_str, pattern):
                         return True
 
-                # Простая строка - имя файла или папки
                 else:
-                    # Проверяем, содержится ли паттерн в пути
                     if pattern in rel_path.split('/') or pattern in path_str.split('/'):
-                        # Проверяем, что это отдельный элемент пути, а не часть имени
                         path_parts = rel_path.split('/')
                         if pattern in path_parts:
                             return True
 
-                    # Проверяем полное совпадение
                     if rel_path == pattern or path_str.endswith('/' + pattern):
                         return True
 
         return False
 
-    def find_py_files(self, root_dir="."):
-        py_files = []
+    def find_files_by_types(self, root_dir=".", file_types=None):
+        if file_types is None:
+            file_types = self.config.get("file_types", [".py"])
+
+        files = []
         excluded_count = 0
 
-        for root, dirs, files in os.walk(root_dir):
-            # Исключаем директории
+        for root, dirs, filenames in os.walk(root_dir):
             dirs_to_remove = []
             for d in dirs:
                 full_dir_path = os.path.join(root, d)
@@ -195,16 +179,15 @@ class PyParser:
             for d in dirs_to_remove:
                 dirs.remove(d)
 
-            # Обрабатываем файлы
-            for file in files:
-                if file.endswith('.py'):
-                    full_path = os.path.join(root, file)
+            for filename in filenames:
+                if any(filename.endswith(ext) for ext in file_types):
+                    full_path = os.path.join(root, filename)
                     if not self.should_exclude(full_path):
-                        py_files.append(full_path)
+                        files.append(full_path)
                     else:
                         excluded_count += 1
 
-        return py_files, excluded_count
+        return files, excluded_count
 
     def try_read_file(self, file_path):
         try:
@@ -219,31 +202,30 @@ class PyParser:
                 except UnicodeDecodeError:
                     continue
 
-            # Пробуем UTF-16
             try:
                 return raw_data.decode('utf-16')
             except UnicodeDecodeError:
                 pass
 
-            # В крайнем случае игнорируем ошибки
             return raw_data.decode('utf-8', errors='ignore')
 
         except Exception as e:
             raise UnicodeDecodeError(f"Не удалось прочитать файл {file_path}: {e}")
 
-    def collect_all_py_files(self):
-        print("Поиск .py файлов...")
-        py_files, excluded_count = self.find_py_files()
+    def collect_all_files(self):
+        file_types = self.config.get("file_types", [".py"])
+        print(f"Поиск файлов с расширениями: {', '.join(file_types)}...")
+        files, excluded_count = self.find_files_by_types(".", file_types)
 
-        if not py_files:
-            print("Не найдено .py файлов для обработки")
+        if not files:
+            print("Не найдено файлов для обработки")
             return
 
         output_file = "code.txt"
 
         try:
             with open(output_file, 'w', encoding='utf-8') as out_f:
-                for file_path in py_files:
+                for file_path in files:
                     try:
                         content = self.try_read_file(file_path)
 
@@ -258,7 +240,7 @@ class PyParser:
                     except Exception as e:
                         print(f"Ошибка при обработке {file_path}: {e}")
 
-            print(f"✓ Собрано {len(py_files)} файлов (исключено: {excluded_count})")
+            print(f"✓ Собрано {len(files)} файлов (исключено: {excluded_count})")
             print(f"✓ Результат сохранен в: {output_file}")
 
         except Exception as e:
@@ -312,14 +294,11 @@ class PyParser:
         excluded = self.config.get("excluded", [])
 
         for item in new_items:
-            # Нормализуем путь
             item = item.replace('\\', '/')
 
-            # Для папок добавляем оба варианта для надежности
             if item.endswith('/'):
                 item = item.rstrip('/') + '/*'
             elif not item.endswith('/*') and not '*' in item and not '.' in item:
-                # Если это похоже на имя папки без расширения
                 item = item + '/*'
 
             if item not in excluded:
@@ -367,6 +346,99 @@ class PyParser:
         except ValueError:
             print("Ошибка: введите номера цифрами")
 
+    def manage_file_types(self):
+        while True:
+            print("\n" + "=" * 40)
+            print("Управление типами файлов")
+            print("=" * 40)
+            print("Текущие типы файлов для сбора:")
+
+            file_types = self.config.get("file_types", [".py"])
+            for i, ext in enumerate(file_types, 1):
+                print(f"{i}. {ext}")
+
+            print(f"\n1. Добавить тип файла")
+            print(f"2. Удалить тип файла")
+            print(f"3. Сбросить к значениям по умолчанию")
+            print(f"4. Назад")
+
+            choice = input("\nВыберите действие (1-4): ").strip()
+
+            if choice == "1":
+                self.add_file_type()
+            elif choice == "2":
+                self.remove_file_type()
+            elif choice == "3":
+                self.reset_file_types()
+            elif choice == "4":
+                self.save_config()
+                break
+            else:
+                print("Неверный выбор")
+
+    def add_file_type(self):
+        print("\nФормат ввода:")
+        print("- Расширение должно начинаться с точки")
+        print("- Примеры: .html, .css, .js, .json")
+        print("Можно указать несколько через запятую")
+
+        user_input = input("\nВведите расширения: ").strip()
+        if not user_input:
+            return
+
+        new_exts = [ext.strip() for ext in user_input.split(',') if ext.strip()]
+        file_types = self.config.get("file_types", [".py"])
+
+        for ext in new_exts:
+            if not ext.startswith('.'):
+                ext = '.' + ext
+
+            if ext not in file_types:
+                file_types.append(ext)
+                print(f"Добавлено: {ext}")
+            else:
+                print(f"Уже существует: {ext}")
+
+        self.config["file_types"] = file_types
+        self.save_config()
+
+    def remove_file_type(self):
+        file_types = self.config.get("file_types", [".py"])
+        if not file_types:
+            print("Список типов файлов пуст")
+            return
+
+        print("Введите номер типа файла для удаления (можно несколько через запятую):")
+        try:
+            nums = input("Номера: ").strip()
+            if not nums:
+                return
+
+            indices = [int(n.strip()) - 1 for n in nums.split(',')]
+            indices.sort(reverse=True)
+
+            removed_count = 0
+            for idx in indices:
+                if 0 <= idx < len(file_types):
+                    removed = file_types.pop(idx)
+                    print(f"Удалено: {removed}")
+                    removed_count += 1
+                else:
+                    print(f"Неверный номер: {idx + 1}")
+
+            if removed_count > 0:
+                self.config["file_types"] = file_types
+                self.save_config()
+
+        except ValueError:
+            print("Ошибка: введите номера цифрами")
+
+    def reset_file_types(self):
+        default = [".py", ".html", ".css", ".js", ".json", ".txt", ".md"]
+        self.config["file_types"] = default.copy()
+        self.save_config()
+        print("Типы файлов сброшены к значениям по умолчанию")
+
     def reset_exceptions(self):
         default = [".venv", "__pycache__", ".git", "pyparser.py", "pyparser_config.json"] + self.output_files
         self.config["excluded"] = default.copy()
@@ -380,15 +452,17 @@ class PyParser:
         print("Конфигурация сохранена")
 
     def collect_selected_files(self):
-        print("\nВведите названия файлов .py (через запятую):")
+        print("\nВведите названия файлов (через запятую):")
+        print("Можно указывать с расширением или без")
         user_input = input("Файлы: ").strip()
         if not user_input:
             print("Не указаны файлы")
             return
 
         file_names = [name.strip() for name in user_input.split(',') if name.strip()]
+        file_types = self.config.get("file_types", [".py"])
 
-        all_files, _ = self.find_py_files()
+        all_files, _ = self.find_files_by_types(".", file_types)
 
         selected_files = []
         for pattern in file_names:
@@ -506,12 +580,13 @@ class PyParser:
         print("\n" + "=" * 40)
         print("PyParser - Парсер Python проектов")
         print("=" * 40)
-        print("1. Собрать все .py файлы в txt (code.txt)")
+        print("1. Собрать все файлы в txt (code.txt)")
         print("2. Управление исключениями")
-        print("3. Собрать выбранные файлы .py в txt (choosen_code.txt)")
+        print("3. Собрать выбранные файлы в txt (choosen_code.txt)")
         print("4. Создать структуру проекта в txt (structure.txt)")
-        print("5. Выход")
-        return input("\nВыберите действие (1-5): ").strip()
+        print("5. Управление типами файлов")
+        print("6. Выход")
+        return input("\nВыберите действие (1-6): ").strip()
 
     def main_loop(self):
         while True:
@@ -519,7 +594,7 @@ class PyParser:
                 choice = self.show_menu()
 
                 if choice == "1":
-                    self.collect_all_py_files()
+                    self.collect_all_files()
                 elif choice == "2":
                     self.manage_exceptions()
                 elif choice == "3":
@@ -527,6 +602,8 @@ class PyParser:
                 elif choice == "4":
                     self.generate_structure()
                 elif choice == "5":
+                    self.manage_file_types()
+                elif choice == "6":
                     print("\nДо свидания!")
                     break
                 else:

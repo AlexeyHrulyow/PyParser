@@ -116,47 +116,56 @@ class PyParser:
             return False
 
         path_str = str(abs_path).replace('\\', '/')
+        path_lower = path_str.lower()
 
         cwd = Path.cwd().absolute()
         cwd_str = str(cwd).replace('\\', '/')
+        cwd_lower = cwd_str.lower()
 
-        if path_str.startswith(cwd_str + '/'):
+        if path_lower.startswith(cwd_lower + '/'):
             rel_path = path_str[len(cwd_str) + 1:]
+            rel_path_lower = rel_path.lower()
         else:
             rel_path = path_str
+            rel_path_lower = rel_path.lower()
 
         for pattern in self.config.get("excluded", []):
             pattern = pattern.strip()
             if not pattern:
                 continue
 
-            pattern = pattern.replace('\\', '/')
+            pattern_lower = pattern.lower().replace('\\', '/')
 
             if os.path.isabs(pattern):
                 pattern_abs = Path(pattern).absolute()
                 pattern_str = str(pattern_abs).replace('\\', '/')
-                if path_str.startswith(pattern_str):
+                pattern_str_lower = pattern_str.lower()
+                if path_lower.startswith(pattern_str_lower):
                     return True
 
             else:
-                if pattern.endswith('/*'):
-                    dir_pattern = pattern[:-2]
-                    if rel_path.startswith(dir_pattern + '/') or rel_path == dir_pattern:
+                pattern_lower = pattern_lower.replace('\\', '/')
+
+                if pattern_lower.endswith('/*'):
+                    dir_pattern = pattern_lower[:-2]
+                    if rel_path_lower.startswith(dir_pattern + '/') or rel_path_lower == dir_pattern:
                         return True
-                    if path_str.endswith('/' + dir_pattern) or path_str.endswith('/' + dir_pattern + '/'):
+                    if path_lower.endswith('/' + dir_pattern) or path_lower.endswith('/' + dir_pattern + '/'):
                         return True
 
-                elif '*' in pattern:
-                    if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(path_str, pattern):
+                elif '*' in pattern_lower:
+                    if fnmatch.fnmatch(rel_path_lower, pattern_lower) or fnmatch.fnmatch(path_lower, pattern_lower):
+                        return True
+                    if fnmatch.fnmatch(os.path.basename(rel_path_lower), pattern_lower):
                         return True
 
                 else:
-                    if pattern in rel_path.split('/') or pattern in path_str.split('/'):
-                        path_parts = rel_path.split('/')
-                        if pattern in path_parts:
+                    if pattern_lower in rel_path_lower.split('/') or pattern_lower in path_lower.split('/'):
+                        path_parts = rel_path_lower.split('/')
+                        if pattern_lower in path_parts:
                             return True
 
-                    if rel_path == pattern or path_str.endswith('/' + pattern):
+                    if rel_path_lower == pattern_lower or path_lower.endswith('/' + pattern_lower):
                         return True
 
         return False
@@ -180,7 +189,7 @@ class PyParser:
                 dirs.remove(d)
 
             for filename in filenames:
-                if any(filename.endswith(ext) for ext in file_types):
+                if any(filename.lower().endswith(ext.lower()) for ext in file_types):
                     full_path = os.path.join(root, filename)
                     if not self.should_exclude(full_path):
                         files.append(full_path)
@@ -224,7 +233,7 @@ class PyParser:
         output_file = "code.txt"
 
         try:
-            with open(output_file, 'w', encoding='utf-8') as out_f:
+            with open(output_file, 'w', encoding='utf-8', newline='\n') as out_f:
                 for file_path in files:
                     try:
                         content = self.try_read_file(file_path)
@@ -232,9 +241,11 @@ class PyParser:
                         out_f.write(f"\n{'=' * 80}\n")
                         out_f.write(f"# Файл: {file_path}\n")
                         out_f.write(f"{'=' * 80}\n\n")
-                        out_f.write(content)
-                        if not content.endswith('\n'):
-                            out_f.write('\n')
+
+                        lines = content.splitlines()
+                        for line in lines:
+                            out_f.write(line + '\n')
+
                         out_f.write("\n")
 
                     except Exception as e:
@@ -283,7 +294,7 @@ class PyParser:
         print("\nФормат ввода:")
         print("- Файл: example.py")
         print("- Папка (и всё внутри): folder/  или folder/*")
-        print("- Паттерн: *.py, test_*")
+        print("- Паттерн: *.py, test_*, *test*.py")
         print("Можно указать несколько через запятую")
 
         user_input = input("\nВведите исключение(я): ").strip()
@@ -295,11 +306,6 @@ class PyParser:
 
         for item in new_items:
             item = item.replace('\\', '/')
-
-            if item.endswith('/'):
-                item = item.rstrip('/') + '/*'
-            elif not item.endswith('/*') and not '*' in item and not '.' in item:
-                item = item + '/*'
 
             if item not in excluded:
                 excluded.append(item)
@@ -506,7 +512,7 @@ class PyParser:
         output_file = "choosen_code.txt"
 
         try:
-            with open(output_file, 'w', encoding='utf-8') as out_f:
+            with open(output_file, 'w', encoding='utf-8', newline='\n') as out_f:
                 for file_path in selected_files:
                     try:
                         content = self.try_read_file(file_path)
@@ -514,9 +520,11 @@ class PyParser:
                         out_f.write(f"\n{'=' * 80}\n")
                         out_f.write(f"# Файл: {file_path}\n")
                         out_f.write(f"{'=' * 80}\n\n")
-                        out_f.write(content)
-                        if not content.endswith('\n'):
-                            out_f.write('\n')
+
+                        lines = content.splitlines()
+                        for line in lines:
+                            out_f.write(line + '\n')
+
                         out_f.write("\n")
 
                     except Exception as e:
@@ -532,7 +540,7 @@ class PyParser:
         output_file = "structure.txt"
 
         try:
-            with open(output_file, 'w', encoding='utf-8') as f:
+            with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(f"Структура проекта: {os.path.basename(os.getcwd())}\n")
                 f.write("=" * 60 + "\n\n")
 

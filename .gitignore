@@ -1,7 +1,6 @@
 /test_project/
 
 # PyParser generated files
-pyparser.py
 pyparser_config.json
 structure.txt
 choosen_code.txt
